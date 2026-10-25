@@ -1,0 +1,41 @@
+syntax = "proto3";
+package bridge.relay.v1;
+
+// Draft live transport. One Frame per binary WebSocket message, max 65536 bytes.
+// This revision uses a strict subset: no unknown, duplicate or default-valued
+// fields; fields must match the kind's schema. See PROTOCOL.md.
+message Frame {
+  uint64 version = 1;
+  Kind kind = 2;
+  string device_id = 3;
+  bytes client_nonce = 4;
+  string relay_id = 5;
+  string session_id = 6;
+  bytes challenge = 7;
+  uint64 expires_at = 8;
+  bytes signature = 9;
+  Packet packet = 10;
+  string message_id = 11;
+  bytes digest = 12;
+}
+enum Kind {
+  UNSPECIFIED = 0;
+  HELLO = 1;
+  CHALLENGE = 2;
+  AUTHENTICATE = 3;
+  READY = 4;
+  SUBMIT = 5;
+  FORWARDED = 6;
+  DELIVER = 7;
+  UNAVAILABLE = 8;
+  AUTH_REJECTED = 9;
+}
+message Packet {
+  string sender_id = 1;
+  string recipient_id = 2;
+  string pairing_id = 3;
+  string message_id = 4;
+  bytes protected_body = 5;
+  string protocol = 6; // Exactly "bridge-relay-e2ee-v1"; not paired-v2.
+  uint64 kind = 7; // 1: encrypted envelope, 2: signed endpoint receipt.
+}

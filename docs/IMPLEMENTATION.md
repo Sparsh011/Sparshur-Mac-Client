@@ -1,7 +1,7 @@
 # Native receiver implementation
 
 The primary path is SwiftUI → AppModel → ReceiverCoordinator → EndpointService →
-CryptoKit/Keychain. Network.framework supplies TCP bytes to a bounded HTTP parser.
+CryptoKit/Keychain. A BSD TCP listener and DispatchIO feed a bounded HTTP parser.
 There is no Python receiver or helper subprocess in the app.
 
 ## Read in this order

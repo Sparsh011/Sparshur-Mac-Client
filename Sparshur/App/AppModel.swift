@@ -1,5 +1,7 @@
+import AppKit
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum Destination: String, CaseIterable, Identifiable {
   case messages, pairPhone, learn
@@ -7,15 +9,15 @@ enum Destination: String, CaseIterable, Identifiable {
   var id: Self { self }
   var title: String {
     switch self {
-    case .messages: "Messages"
-    case .pairPhone: "Pair phone"
+    case .messages: "Clipboard"
+    case .pairPhone: "Devices"
     case .learn: "Learn"
     }
   }
   var symbol: String {
     switch self {
-    case .messages: "bubble.left.and.bubble.right"
-    case .pairPhone: "qrcode.viewfinder"
+    case .messages: "clipboard"
+    case .pairPhone: "iphone"
     case .learn: "book.closed"
     }
   }
@@ -30,6 +32,11 @@ enum Destination: String, CaseIterable, Identifiable {
 
 @MainActor @Observable
 final class AppModel {
+  struct ClipboardUpdate {
+    let date: Date
+    let succeeded: Bool
+  }
+
   private var currentDestination: Destination = .messages
   private var backStack: [Destination] = []
   private var forwardStack: [Destination] = []
@@ -79,6 +86,7 @@ final class AppModel {
   var checkedAt: Date?
   @ObservationIgnored private let platform = PlatformService()
   @ObservationIgnored private let receiver: ReceiverCoordinator
+  @ObservationIgnored private let pasteboard: NSPasteboard
   @ObservationIgnored private var eventTask: Task<Void, Never>?
   @ObservationIgnored private var clockTask: Task<Void, Never>?
   @ObservationIgnored private var pairingCancellation: Task<Void, Never>?
@@ -93,7 +101,13 @@ final class AppModel {
     if case .identityAccessRequired = receiverStatus { return true }
     return false
   }
+  var hasOutgoingFile = false
+  var isQueueingFile = false
+  var fileStatus: String?
   var observations: [LocalObservation] = []
+  private(set) var clipboardUpdate: ClipboardUpdate?
+  private var receiverIdentity: PublicIdentity?
+  private var peerContact: PeerContact?
   var duplicateCount = 0
   var rejectedCount = 0
   var verifiedCount = 0
@@ -101,7 +115,10 @@ final class AppModel {
   var verifiedMessages: [LocalObservation] { observations.filter { $0.kind == .paired } }
   var comparisons: [LocalObservation] { observations.filter { $0.kind != .paired } }
 
-  init(receiver: ReceiverCoordinator = ReceiverCoordinator()) { self.receiver = receiver }
+  init(receiver: ReceiverCoordinator = ReceiverCoordinator(), pasteboard: NSPasteboard = .general) {
+    self.receiver = receiver
+    self.pasteboard = pasteboard
+  }
 
   func beginSession() {
     guard eventTask == nil else { return }
@@ -112,8 +129,19 @@ final class AppModel {
         case .observation(let observation):
           observations.insert(observation, at: 0)
           observations = Array(observations.prefix(40))
-          if observation.kind == .paired { verifiedCount += 1 }
+          if observation.kind == .paired {
+            verifiedCount += 1
+            copyToClipboard(observation)
+          }
+        case .peerContact(let contact): peerContact = contact
         case .duplicate: duplicateCount += 1
+        case .outgoingFileQueued(let name):
+          hasOutgoingFile = true
+          fileStatus = "\(name) is ready. On Android, open Receive file from Mac."
+        case .outgoingFileCleared(let delivered):
+          hasOutgoingFile = false
+          fileStatus =
+            delivered ? "File saved on Android." : "Queued file cleared after pairing changed."
         case .rejected: rejectedCount += 1
         case .storageFailed:
           rejectedCount += 1
@@ -122,7 +150,10 @@ final class AppModel {
           receiverStatus = .identityAccessRequired(
             "Keychain could not save verified state; authorize existing identity")
         case .networkChanged: await refreshAddresses()
-        case .identity(let identity): identityCheck = .available(identity)
+        case .identity(let identity):
+          if peerContact?.senderID != identity.senderID { peerContact = nil }
+          receiverIdentity = identity
+          identityCheck = .available(identity)
         case .pairingCleared(let revision):
           if let pairingCode, pairingCode.revision <= revision { self.pairingCode = nil }
         case .status(let status):
@@ -149,6 +180,63 @@ final class AppModel {
     }
     resumeReceiver()
   }
+
+  func copyToClipboard(_ observation: LocalObservation) {
+    guard let content = observation.clipboardContent else { return }
+    pasteboard.clearContents()
+    let succeeded: Bool
+    switch content {
+    case .text(let text):
+      succeeded = pasteboard.setString(text, forType: .string)
+    case .image(let data, let type):
+      succeeded = pasteboard.setData(data, forType: NSPasteboard.PasteboardType(type.identifier))
+    }
+    clipboardUpdate = ClipboardUpdate(date: .now, succeeded: succeeded)
+  }
+
+  func queueFile(at url: URL) async {
+    guard !hasOutgoingFile, !isQueueingFile else { return }
+    isQueueingFile = true
+    defer { isQueueingFile = false }
+    let hasAccess = url.startAccessingSecurityScopedResource()
+    defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
+    do {
+      let values = try url.resourceValues(forKeys: [.isRegularFileKey, .contentTypeKey])
+      guard values.isRegularFile == true else {
+        fileStatus = "Choose a regular file."
+        return
+      }
+      let source = try FileHandle(forReadingFrom: url)
+      defer { try? source.close() }
+      var data = Data()
+      while data.count <= PairedFile.maxBytes {
+        let remaining = PairedFile.maxBytes + 1 - data.count
+        guard let chunk = try source.read(upToCount: min(64 * 1024, remaining)),
+          !chunk.isEmpty
+        else { break }
+        data.append(chunk)
+      }
+      guard data.count <= PairedFile.maxBytes else {
+        fileStatus = "Choose a file up to 5 MiB."
+        return
+      }
+      let file = try PairedFile(
+        name: url.lastPathComponent,
+        mime: values.contentType?.preferredMIMEType ?? "application/octet-stream",
+        data: data)
+      try await receiver.queueFile(file)
+    } catch {
+      fileStatus =
+        "Couldn’t queue the file. Check that the receiver is running and your phone is paired."
+    }
+  }
+
+  func cancelOutgoingFile() async {
+    await receiver.cancelOutgoingFile()
+    hasOutgoingFile = false
+    fileStatus = "File removed from the send queue."
+  }
+
   func resumeReceiver() {
     guard !isAuthorizingIdentity else { return }
     receiverStatus = .starting
@@ -174,12 +262,15 @@ final class AppModel {
     defer { isCreatingPairing = false }
     await pairingCancellation?.value
     do {
-      let code = try await receiver.createPairing(host: address.host)
+      let code = try await receiver.createPairing(at: address)
       guard selectedAddress?.id == address.id, receiverStatus == .listening else {
         await receiver.cancelPairing()
         return
       }
       pairingCode = code
+    } catch ReceiverCoordinator.PairingError.vpnAddressUnavailable {
+      await refreshAddresses()
+      pairingError = "Connect Tailscale on this Mac, then select its current VPN address."
     } catch { pairingError = "Could not create a QR. Check receiver and Keychain access." }
   }
   func cancelPairing() {
@@ -208,27 +299,15 @@ final class AppModel {
 
   var selectedAddress: LocalAddress? { addresses.first { $0.id == selectedAddressID } }
   var savedIdentity: PublicIdentity? {
+    // An asynchronous diagnostics check can be older than the receiver's pairing.
+    if let receiverIdentity { return receiverIdentity }
     if case .available(let identity) = identityCheck { return identity }
     return nil
   }
-
-  var pairingSummary: String {
-    switch identityCheck {
-    case .unchecked: "Not checked"
-    case .available(let identity): identity.senderID == nil ? "No phone yet" : "Saved pairing"
-    case .notFound: "Not set up here"
-    case .authorizationRequired, .invalid, .unavailable: "Check needed"
-    }
-  }
-
-  var pairingDetail: String {
-    switch identityCheck {
-    case .unchecked: "Check your saved identity"
-    case .available(let identity):
-      identity.senderID == nil ? "Start with a one-time QR" : "Reachability not checked"
-    case .notFound: "Existing identity is preserved"
-    case .authorizationRequired, .invalid, .unavailable: "Review Keychain access"
-    }
+  var pairedSenderID: String? { savedIdentity?.senderID }
+  var lastContact: PeerContact? {
+    guard let peerContact, peerContact.senderID == pairedSenderID else { return nil }
+    return peerContact
   }
 
   func refreshAddresses() async {

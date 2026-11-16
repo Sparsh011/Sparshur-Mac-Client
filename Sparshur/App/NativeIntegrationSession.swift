@@ -1,4 +1,5 @@
 #if DEBUG
+  import AppKit
   import Darwin
   import Foundation
 
@@ -13,14 +14,18 @@
         exit(2)
       }
       let reply = FileHandle(fileDescriptor: replyFD, closeOnDealloc: false)
+      let pasteboard = NSPasteboard.withUniqueName()
       let model: AppModel
       if memoryOnly {
         let memory = MemoryStore()
         // Explicit test-only random identity; never reads/writes the real Keychain.
-        guard (try? Endpoint(memory)) != nil else { exit(2) }
-        model = AppModel(receiver: ReceiverCoordinator(store: memory))
+        guard (try? Endpoint(memory)) != nil else {
+          pasteboard.releaseGlobally()
+          exit(2)
+        }
+        model = AppModel(receiver: ReceiverCoordinator(store: memory), pasteboard: pasteboard)
       } else {
-        model = AppModel()
+        model = AppModel(pasteboard: pasteboard)
       }
       model.beginSession()
       await model.refreshAddresses()
@@ -72,6 +77,7 @@
           case "quit":
             await model.shutdown()
             try reply.write(contentsOf: Data("{\"ok\":true}\n".utf8))
+            pasteboard.releaseGlobally()
             exit(0)
           default: throw Rejected.invalid
           }
@@ -82,6 +88,7 @@
         }
       }
       await model.shutdown()
+      pasteboard.releaseGlobally()
       exit(0)
     }
     private static func nextLine() async -> String? {

@@ -65,23 +65,37 @@ func transcript(_ q: Object) throws -> String {
   return "bridge-pair-v2|" + (try names.map { try text(q, $0) }).joined(separator: "|")
     + "|\(try number(q, "port"))|\(try number(q, "expires_at"))"
 }
+private func envelopeCiphertext(_ m: Object) throws -> String {
+  if try text(m, "message_type") != "file" { return try text(m, "ciphertext") }
+  guard let value = m["ciphertext"] as? String, value.utf8.count <= PairedFile.maxWireBytes
+  else { throw Rejected.invalid }
+  return value
+}
 func aad(_ m: Object) throws -> String {
   "bridge-lab|2|\(try text(m, "pairing_id"))|\(try text(m, "sender_id"))|"
-    + "\(try text(m, "recipient_id"))|text|\(try number(m, "counter"))|\(try text(m, "message_id"))"
+    + "\(try text(m, "recipient_id"))|\(try text(m, "message_type"))|\(try number(m, "counter"))|\(try text(m, "message_id"))"
 }
 func signedMessage(_ m: Object) throws -> String {
   "bridge-v2/message|" + (try aad(m)) + "|\(try text(m, "nonce"))|"
-    + "\(try text(m, "ciphertext"))|\(try text(m, "wrapped_key"))"
+    + "\(try envelopeCiphertext(m))|\(try text(m, "wrapped_key"))"
 }
-func localHost(_ host: String) -> Bool {
+func ipv4Octets(_ host: String) -> [Int]? {
   let parts = host.split(separator: ".", omittingEmptySubsequences: false)
-  guard parts.count == 4 else { return false }
+  guard parts.count == 4 else { return nil }
   let ints = parts.compactMap { Int($0) }
   guard ints.count == 4,
     zip(parts, ints).allSatisfy({ String($0.1) == $0.0 && (0...255).contains($0.1) })
-  else { return false }
+  else { return nil }
+  return ints
+}
+func localHost(_ host: String) -> Bool {
+  guard let ints = ipv4Octets(host) else { return false }
   return ints[0] == 10 || (ints[0] == 172 && (16...31).contains(ints[1]))
     || (ints[0] == 192 && ints[1] == 168) || host == "127.0.0.1"
+}
+func privateVPNHost(_ host: String) -> Bool {
+  guard let ints = ipv4Octets(host) else { return false }
+  return ints[0] == 100 && (64...127).contains(ints[1])
 }
 // Shared with the relay adapter without making the reference CLI depend on it.
 func relayAuthenticationBytes(
@@ -222,11 +236,14 @@ final class Endpoint {
       "highest": peer?["highest"] ?? NSNull(),
     ]
   }
-  func newPair(_ request: Object, now: Int = Int(Date().timeIntervalSince1970)) throws -> Object {
+  func newPair(
+    _ request: Object, now: Int = Int(Date().timeIntervalSince1970), overPrivateVPN: Bool = false
+  ) throws -> Object {
     try fields(request, "host port")
     let host = try text(request, "host")
     let port = try number(request, "port")
-    guard localHost(host), (1024...65535).contains(port) else { throw Rejected.invalid }
+    guard overPrivateVPN ? privateVPNHost(host) : localHost(host), (1024...65535).contains(port)
+    else { throw Rejected.invalid }
     let bundle: Object = [
       "bridge_pairing": 2, "pairing_id": UUID().uuidString.lowercased(),
       "recipient_id": try text(state, "recipient_id"),
@@ -308,13 +325,18 @@ final class Endpoint {
     pending = nil
     return ack
   }
-  func receive(_ m: Object) throws -> Object {
+  func activePairingID() throws -> String {
+    guard let peer = state["pair"] as? Object else { throw Rejected.state }
+    return try text(peer, "pairing_id")
+  }
+
+  func receive(_ m: Object, type: String = "text") throws -> Object {
     try fields(
       m,
       "lab_version mode suite pairing_id sender_id recipient_id message_id message_type counter nonce ciphertext wrapped_key signature"
     )
     guard try number(m, "lab_version") == 2, try text(m, "mode") == "paired",
-      try text(m, "suite") == suiteName, try text(m, "message_type") == "text",
+      try text(m, "suite") == suiteName, try text(m, "message_type") == type,
       let peer = state["pair"] as? Object,
       try text(m, "pairing_id") == text(peer, "pairing_id"),
       try text(m, "sender_id") == text(peer, "sender_id"),
@@ -326,7 +348,15 @@ final class Endpoint {
     let counter = try number(m, "counter")
     guard (1...1_000_000).contains(counter) else { throw Rejected.invalid }
     let nonce = try bytes(text(m, "nonce"), 12...12)
-    let ciphertext = try bytes(text(m, "ciphertext"), 17...4112)
+    let cipherLength: ClosedRange<Int>
+    switch type {
+    case "text": cipherLength = 17...4112
+    case "file": cipherLength = 21...(PairedFile.maxPayload + 16)
+    case "file_pull": cipherLength = 48...48
+    case "file_ack": cipherLength = 52...52
+    default: throw Rejected.invalid
+    }
+    let ciphertext = try bytes(envelopeCiphertext(m), cipherLength)
     let wrapped = try bytes(text(m, "wrapped_key"), 80...80)
     let s = try signedMessage(m)
     let digest = Data(SHA256.hash(data: utf8(s))).base64EncodedString()
@@ -352,9 +382,20 @@ final class Endpoint {
       nonce: .init(data: nonce), ciphertext: ciphertext.dropLast(16), tag: ciphertext.suffix(16))
     let plaintext = try ChaChaPoly.open(
       box, using: SymmetricKey(data: contentKey), authenticating: utf8(aad(m)))
-    guard (1...4096).contains(plaintext.count),
-      let display = String(data: plaintext, encoding: .utf8)
-    else { throw Rejected.invalid }
+    var result: Object
+    switch type {
+    case "text":
+      guard let display = String(data: plaintext, encoding: .utf8) else { throw Rejected.invalid }
+      result = ["decrypted_text": display]
+    case "file":
+      result = ["decrypted_file": try PairedFile.decode(plaintext)]
+    case "file_pull":
+      result = ["response_key": plaintext]
+    default:
+      guard let id = String(data: plaintext, encoding: .utf8) else { throw Rejected.invalid }
+      try uuid(id)
+      result = ["ack_file_id": id]
+    }
     var nextPeer = peer
     var next = state
     nextPeer["highest"] = counter
@@ -364,7 +405,8 @@ final class Endpoint {
     next["pair"] = nextPeer
     try store.save(json(next))  // Commit replay protection before disclosure/receipt.
     state = next
-    return ["receipt": try receipt(m, digest, false), "decrypted_text": display]
+    result["receipt"] = try receipt(m, digest, false)
+    return result
   }
   private func receipt(_ m: Object, _ digest: String, _ duplicate: Bool) throws -> Object {
     let r =

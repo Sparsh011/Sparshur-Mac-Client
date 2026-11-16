@@ -12,17 +12,10 @@ struct SidebarView: View {
           .frame(width: 34, height: 34)
           .background(Theme.pink.opacity(0.10))
           .clipShape(RoundedRectangle(cornerRadius: 9))
-        VStack(alignment: .leading, spacing: 3) {
-          Text("sparshur").font(Theme.font(19, weight: .semibold)).tracking(-0.6)
-            .foregroundStyle(Theme.text)
-          Text("ANDROID ↔ MAC").font(Theme.font(8, weight: .medium)).tracking(1.5)
-            .foregroundStyle(Theme.muted)
-        }
+        Text("Sparshur").font(Theme.font(18, weight: .semibold)).tracking(-0.6)
+          .foregroundStyle(Theme.text)
       }
-      .padding(.horizontal, 19).padding(.top, 22).padding(.bottom, 30)
-
-      Text("WORKSPACE").font(Theme.font(9, weight: .semibold)).tracking(1.5)
-        .foregroundStyle(Theme.muted).padding(.horizontal, 22).padding(.bottom, 8)
+      .padding(.horizontal, 19).padding(.top, 22).padding(.bottom, 20)
 
       List(selection: $model.destination) {
         ForEach(Destination.allCases) { destination in
@@ -30,17 +23,10 @@ struct SidebarView: View {
             Image(systemName: destination.symbol).frame(width: 18)
             Text(destination.title)
             Spacer()
-            if destination == .messages {
-              Text("\(model.verifiedMessages.count)").font(Theme.font(10, design: .monospaced))
-                .foregroundStyle(Theme.muted)
-            }
           }
           .font(Theme.font(12, weight: model.destination == destination ? .medium : .regular))
           .padding(.vertical, 7)
           .foregroundStyle(model.destination == destination ? Theme.pink : Theme.secondary)
-          .listRowBackground(
-            model.destination == destination ? Theme.pink.opacity(0.09) : Color.clear
-          )
           .tag(destination)
         }
       }
@@ -49,24 +35,26 @@ struct SidebarView: View {
       .padding(.horizontal, 8)
       .accessibilityLabel("Workspace navigation")
 
-      VStack(alignment: .leading, spacing: 11) {
-        HStack(spacing: 7) {
-          Image(systemName: "desktopcomputer").foregroundStyle(Theme.secondary)
-          Text("This Mac").font(Theme.font(11, weight: .medium))
-          Spacer()
-          Text("LOCAL").font(Theme.font(8, weight: .semibold)).tracking(0.8)
-            .foregroundStyle(Theme.muted)
+      Button {
+        model.destination = .pairPhone
+      } label: {
+        HStack(spacing: 9) {
+          Image(systemName: "iphone").foregroundStyle(Theme.pink)
+          VStack(alignment: .leading, spacing: 4) {
+            Text(model.pairedSenderID == nil ? "Pair an Android phone" : "Android phone")
+              .font(Theme.font(11, weight: .semibold)).foregroundStyle(Theme.text)
+            if model.pairedSenderID != nil {
+              Text("Paired").font(Theme.font(10)).foregroundStyle(Theme.secondary)
+            }
+          }
+          Spacer(minLength: 0)
+          Image(systemName: "chevron.right").font(Theme.font(9)).foregroundStyle(Theme.muted)
         }
-        HStack(spacing: 6) {
-          Circle().stroke(Theme.muted, lineWidth: 1.5).frame(width: 5, height: 5)
-          Text(model.receiverStatus.shortTitle).font(Theme.font(10)).foregroundStyle(
-            Theme.secondary)
-        }
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
       }
-      .padding(13)
-      .background(Theme.surface)
-      .clipShape(RoundedRectangle(cornerRadius: 8))
-      .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+      .buttonStyle(.plain)
       .padding(.horizontal, 15).padding(.bottom, 15)
 
       Divider().overlay(Theme.border)

@@ -21,12 +21,15 @@ func testPair(_ endpoint: Endpoint, _ android: Curve25519.Signing.PrivateKey) th
 ) {
   let created = try endpoint.newPair(["host": "127.0.0.1", "port": 8787], now: 1_000_000_000)
   let bundle = try object(utf8(text(created, "bundle")))
+  return (created, try testPairRequest(bundle, android))
+}
+func testPairRequest(_ bundle: Object, _ android: Curve25519.Signing.PrivateKey) throws -> Object {
   let sender = "22222222-2222-4222-8222-222222222222"
   let t =
     try transcript(bundle) + "|" + sender + "|"
     + android.publicKey.rawRepresentation.base64EncodedString()
   let input = utf8("bridge-v2/pair|" + t)
-  let request: Object = [
+  return [
     "pairing_id": try text(bundle, "pairing_id"), "sender_id": sender,
     "sender_key": android.publicKey.rawRepresentation.base64EncodedString(),
     "proof": Data(
@@ -36,21 +39,21 @@ func testPair(_ endpoint: Endpoint, _ android: Curve25519.Signing.PrivateKey) th
     ).base64EncodedString(),
     "signature": try android.signature(for: input).base64EncodedString(),
   ]
-  return (created, request)
 }
-func testMessage(_ bundle: Object, _ android: Curve25519.Signing.PrivateKey, _ counter: Int) throws
-  -> Object
-{
+func testMessage(
+  _ bundle: Object, _ android: Curve25519.Signing.PrivateKey, _ counter: Int,
+  type: String = "text", payload: Data = utf8("Paired hello from a public test vector! 🔐")
+) throws -> Object {
   var m: Object = [
     "lab_version": 2, "mode": "paired", "suite": suiteName,
     "pairing_id": try text(bundle, "pairing_id"),
     "sender_id": "22222222-2222-4222-8222-222222222222",
     "recipient_id": try text(bundle, "recipient_id"), "message_id": UUID().uuidString.lowercased(),
-    "message_type": "text", "counter": counter,
+    "message_type": type, "counter": counter,
   ]
   let key = Data(repeating: 0x44, count: 32)  // Public test key; never used by runtime encryption.
   let box = try ChaChaPoly.seal(
-    utf8("Paired hello from a public test vector! 🔐"),
+    payload,
     using: SymmetricKey(data: key), nonce: .init(data: Data(repeating: UInt8(counter), count: 12)),
     authenticating: utf8(aad(m)))
   var sender = try HPKE.Sender(

@@ -4,119 +4,184 @@ import SwiftUI
 struct PairPhoneView: View {
   @Environment(AppModel.self) private var model
   @AppStorage("showExplanations") private var showExplanations = true
+  @State private var showsPairingSetup = false
   @State private var confirmingReplacement = false
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
-        PageHeader(
-          eyebrow: "A trusted connection", title: "Pair your phone",
-          subtitle: "One QR. Two devices. A shared starting point for trust.")
-        ViewThatFits(in: .horizontal) {
-          HStack(alignment: .top, spacing: 18) {
-            setupPanel.frame(minWidth: 270, idealWidth: 420, maxWidth: .infinity)
-            qrPanel.frame(width: 260)
-          }
-          VStack(spacing: 18) {
-            setupPanel
-            qrPanel
+      VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 7) {
+          Text("Devices")
+            .font(Theme.font(29, weight: .semibold)).tracking(-0.8)
+            .foregroundStyle(Theme.text)
+          Text("Manage your Android pairing and check the last verified contact.")
+            .font(Theme.font(12)).foregroundStyle(Theme.secondary)
+        }
+        devicesPanel
+        receiverPanel
+        if model.pairedSenderID == nil || showsPairingSetup || model.pairingCode != nil {
+          ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 16) {
+              setupPanel.frame(minWidth: 260, maxWidth: .infinity)
+              qrPanel.frame(width: 260)
+            }
+            VStack(spacing: 14) {
+              setupPanel
+              qrPanel
+            }
           }
         }
-        identityPanel
-        DisclosureGroup("What exactly establishes trust?") {
-          VStack(alignment: .leading, spacing: 12) {
-            Text(
-              "1. Mac generates its encryption/signing keys locally. The public pairing ID labels this attempt; a separate random temporary secret authenticates it."
-            )
-            Text(
-              "2. The QR visually transfers public keys, address, pairing ID, expiry and secret to your phone."
-            )
-            Text(
-              "3. You confirm on Android. It sends its signing public key, an HMAC proof and its signature over the full transcript. It does not send the QR secret."
-            )
-            Text(
-              "4. Mac verifies both, saves Android's public signing key, then returns its own HMAC proof and signature. Android verifies using the scanned Mac key before pinning it."
-            )
-            Text(
-              "HMAC uses the shared QR secret. Signatures use a private key to sign and its public key to verify. Changing a bound public key invalidates the original proof and signature."
-            )
-            Text(
-              "A stolen, still-usable QR secret is a different threat: its holder can attempt a new valid handshake. Protect the displayed code. Replay counters protect later messages; they do not fix a compromised pairing channel."
-            )
-          }.font(Theme.font(11)).foregroundStyle(Theme.secondary).lineSpacing(4).padding(.top, 12)
-        }.font(Theme.font(12)).foregroundStyle(Theme.text)
+        DisclosureGroup("Mac identity and diagnostics") {
+          identityPanel.padding(.top, 10)
+        }
+        .font(Theme.font(12, weight: .medium)).foregroundStyle(Theme.secondary)
         if showExplanations {
-          Explanation(
-            title: "Scanning is the introduction. Pairing is the handshake.",
-            text:
-              "The QR carries public keys, a network address and a five-minute secret. Android must confirm and complete the authenticated handshake before either device trusts the other."
-          )
-          Button {
-            model.showLesson(.pairing)
-          } label: {
-            Label("Walk through pairing", systemImage: "arrow.up.right")
-          }.buttonStyle(.plain).font(Theme.font(11)).foregroundStyle(Theme.pink)
+          Button("Learn how pairing works") { model.showLesson(.pairing) }
+            .buttonStyle(.plain).font(Theme.font(11)).foregroundStyle(Theme.pink)
         }
       }
-      .padding(30).frame(maxWidth: 1060).frame(maxWidth: .infinity)
+      .padding(28).frame(maxWidth: 870).frame(maxWidth: .infinity)
+    }
+  }
+
+  private var devicesPanel: some View {
+    Panel {
+      VStack(alignment: .leading, spacing: 0) {
+        HStack {
+          Text("Paired devices").font(Theme.font(13, weight: .semibold))
+          Spacer()
+          if model.pairedSenderID != nil && model.pairingCode == nil {
+            Button(showsPairingSetup ? "Hide setup" : "Replace pairing") {
+              showsPairingSetup.toggle()
+            }
+            .buttonStyle(.plain).font(Theme.font(11, weight: .medium))
+            .foregroundStyle(Theme.pink)
+          }
+        }
+        .foregroundStyle(Theme.text).padding(16)
+        Divider().overlay(Theme.border)
+        if let sender = model.pairedSenderID {
+          HStack(alignment: .top, spacing: 13) {
+            Image(systemName: "iphone")
+              .font(Theme.font(17)).foregroundStyle(Theme.pink)
+              .frame(width: 42, height: 42)
+              .background(Theme.pink.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+              .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 7) {
+              Text("Android phone").font(Theme.font(14, weight: .semibold))
+                .foregroundStyle(Theme.text)
+              if let contact = model.lastContact {
+                Text("Last verified contact · \(contact.route)")
+                  .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+                Text(contact.date.formatted(date: .abbreviated, time: .shortened))
+                  .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+              } else {
+                Text("No verified contact this session")
+                  .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+              }
+              Text("Device ID · \(sender)")
+                .font(Theme.font(9, design: .monospaced)).foregroundStyle(Theme.secondary)
+                .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                .help(sender)
+            }
+            Spacer(minLength: 8)
+            StatusBadge(title: "Paired", symbol: "checkmark.shield", accented: true)
+          }
+          .padding(16)
+        } else {
+          Text(emptyDeviceLabel)
+            .font(Theme.font(12)).foregroundStyle(Theme.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        }
+      }
+    }
+  }
+
+  private var emptyDeviceLabel: String {
+    if model.savedIdentity != nil { return "No phone paired." }
+    if model.needsIdentityAccess { return "Authorize Keychain access to view the saved pairing." }
+    if model.receiverStatus == .starting { return "Checking for a saved phone…" }
+    return "Start the receiver to load the saved pairing."
+  }
+
+  private var receiverPanel: some View {
+    let isListening = model.receiverStatus == .listening
+    return Panel {
+      HStack(spacing: 13) {
+        Image(systemName: "desktopcomputer")
+          .font(Theme.font(17)).foregroundStyle(isListening ? Theme.success : Theme.secondary)
+          .frame(width: 42, height: 42)
+          .background(Theme.raised, in: RoundedRectangle(cornerRadius: 9))
+          .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 5) {
+          Text("This Mac").font(Theme.font(13, weight: .semibold)).foregroundStyle(Theme.text)
+          Text(isListening ? "Listening for transfers on port 8787" : model.receiverStatus.title)
+            .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 8)
+        if model.needsIdentityAccess {
+          Button("Authorize identity…") { Task { await model.authorizeIdentity() } }
+            .buttonStyle(SecondaryButtonStyle()).disabled(model.isAuthorizingIdentity)
+        } else if isListening {
+          Button("Pause") { model.pauseReceiver() }.buttonStyle(SecondaryButtonStyle())
+            .accessibilityLabel("Pause receiver")
+        } else {
+          Button("Start receiver") { model.resumeReceiver() }.buttonStyle(SecondaryButtonStyle())
+            .disabled(model.receiverStatus == .starting)
+        }
+      }
+      .padding(16)
     }
   }
 
   private var setupPanel: some View {
     @Bindable var model = model
     return Panel {
-      VStack(alignment: .leading, spacing: 20) {
-        step(
-          "01", title: "Join the same network",
-          text: "Connect this Mac to your phone's hotspot, or put both devices on the same Wi-Fi.")
-        Divider().overlay(Theme.border)
-        VStack(alignment: .leading, spacing: 11) {
-          step(
-            "02", title: "Choose this Mac's address",
-            text: "Select the interface your phone can reach. VPN interfaces may also appear.")
-          Picker("Network address", selection: $model.selectedAddressID) {
-            Text("Select an interface…").tag(nil as String?)
+      VStack(alignment: .leading, spacing: 12) {
+        Text(model.pairedSenderID == nil ? "Pair a phone" : "Replace the paired phone")
+          .font(Theme.font(14, weight: .semibold)).foregroundStyle(Theme.text)
+        Text("Choose Wi-Fi, a hotspot, or Private VPN for Tailscale.")
+          .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+        HStack(spacing: 8) {
+          Picker("Mac network address", selection: $model.selectedAddressID) {
+            Text("Select an address…").tag(nil as String?)
             ForEach(model.addresses) { address in
               Text(address.label).tag(Optional(address.id))
             }
           }
           .labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity, alignment: .leading)
-          .accessibilityLabel("Mac network address")
-          HStack {
-            Text(model.selectedAddress.map { "\($0.host):8787" } ?? "Port 8787 · local network")
-              .font(Theme.font(10, design: .monospaced)).foregroundStyle(Theme.muted)
-              .textSelection(.enabled)
-            Spacer()
-            Button {
-              Task { await model.refreshAddresses() }
-            } label: {
-              Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.plain).foregroundStyle(Theme.secondary)
-            .disabled(model.isRefreshingAddresses).help("Refresh network addresses")
-            .accessibilityLabel("Refresh network addresses")
+          Button {
+            Task { await model.refreshAddresses() }
+          } label: {
+            Label("Refresh network addresses", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
           }
-          if let error = model.addressError {
-            Text(error).font(Theme.font(11)).foregroundStyle(.orange)
-          } else if !model.addresses.contains(where: { !$0.isEmulator }) {
-            Text(
-              "No private IPv4 interface found. Connect to Wi-Fi or your phone's hotspot and refresh."
-            )
-            .font(Theme.font(11)).foregroundStyle(Theme.secondary)
-          }
-          if model.selectedAddress?.isEmulator == true {
-            Text(
-              "10.0.2.2 is for the Android emulator. A physical phone needs this Mac's private IPv4 address."
-            )
-            .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+          .disabled(model.isRefreshingAddresses).help("Refresh network addresses")
+        }
+        if let address = model.selectedAddress {
+          Text("\(address.host):8787")
+            .font(Theme.font(10, design: .monospaced)).foregroundStyle(Theme.secondary)
+            .textSelection(.enabled)
+          if address.isPrivateVPN {
+            Text("Connect Android to the same Tailscale network.")
+              .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+          } else if address.isEmulator {
+            Text("This address works with the Android emulator.")
+              .font(Theme.font(11)).foregroundStyle(Theme.secondary)
           }
         }
+        if let error = model.addressError {
+          Text(error).font(Theme.font(11)).foregroundStyle(.orange)
+        } else if !model.addresses.contains(where: { !$0.isEmulator }) {
+          Text("Connect this Mac, then refresh to find its network address.")
+            .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+        }
         Divider().overlay(Theme.border)
-        step(
-          "03", title: "Scan and confirm on Android",
-          text: "Open Pair with Mac on your phone. Review the fingerprint, then confirm pairing.")
+        Text("On Android, open Pair with Mac, scan the code, and confirm the fingerprint.")
+          .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
-      .padding(20).frame(maxWidth: .infinity, alignment: .leading)
+      .padding(18).frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
@@ -173,24 +238,10 @@ struct PairPhoneView: View {
           .disabled(
             model.receiverStatus != .listening || model.selectedAddress == nil
               || model.isCreatingPairing)
-          if model.needsIdentityAccess {
-            Button(
-              model.isAuthorizingIdentity ? "Waiting for macOS…" : "Authorize existing identity…"
-            ) {
-              Task { await model.authorizeIdentity() }
-            }.buttonStyle(SecondaryButtonStyle()).disabled(model.isAuthorizingIdentity)
-            Text(
-              "macOS may ask to let this locally signed app access the existing learning identity. No key is replaced or exported."
-            )
-            .font(Theme.font(10)).foregroundStyle(Theme.secondary)
-          }
-          if model.receiverStatus != .listening && model.receiverStatus != .starting {
-            Button("Start receiver") { model.resumeReceiver() }.buttonStyle(SecondaryButtonStyle())
-          }
           if let error = model.pairingError {
             Text(error).font(Theme.font(11)).foregroundStyle(.orange)
           }
-          Label("Local QR · five-minute expiry", systemImage: "lock").font(Theme.font(9))
+          Label("QR expires after five minutes", systemImage: "lock").font(Theme.font(9))
             .foregroundStyle(Theme.muted)
         }
       }
@@ -233,11 +284,6 @@ struct PairPhoneView: View {
             Text(identity.fingerprint).font(Theme.font(10, design: .monospaced))
               .foregroundStyle(Theme.secondary).textSelection(.enabled)
               .fixedSize(horizontal: false, vertical: true)
-            Text(
-              identity.senderID == nil
-                ? "No saved phone pairing" : "Saved phone pairing · reachability unknown"
-            )
-            .font(Theme.font(11)).foregroundStyle(Theme.secondary)
             if let counter = identity.highestCounter {
               Text("Saved replay high-water counter: \(counter)")
                 .font(Theme.font(10, design: .monospaced)).foregroundStyle(Theme.muted)
@@ -249,15 +295,4 @@ struct PairPhoneView: View {
     }
   }
 
-  private func step(_ number: String, title: String, text: String) -> some View {
-    HStack(alignment: .top, spacing: 12) {
-      Text(number).font(Theme.font(10, weight: .medium, design: .monospaced))
-        .foregroundStyle(Theme.pink).padding(.top, 2)
-      VStack(alignment: .leading, spacing: 7) {
-        Text(title).font(Theme.font(12, weight: .medium)).foregroundStyle(Theme.text)
-        Text(text).font(Theme.font(11)).foregroundStyle(Theme.secondary).lineSpacing(4)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-  }
 }

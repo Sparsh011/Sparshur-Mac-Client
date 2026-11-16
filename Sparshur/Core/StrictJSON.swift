@@ -3,8 +3,8 @@ import Foundation
 // A bounded JSON grammar pass before Foundation decoding. Foundation alone
 // accepts duplicate object keys, losing the evidence needed to reject them.
 enum StrictJSON {
-  static func decodeObject(_ data: Data) throws -> Object {
-    guard data.count <= 65_536, String(data: data, encoding: .utf8) != nil else {
+  static func decodeObject(_ data: Data, maxBytes: Int = 65_536) throws -> Object {
+    guard data.count <= maxBytes, String(data: data, encoding: .utf8) != nil else {
       throw Rejected.invalid
     }
     var parser = Parser(bytes: Array(data))

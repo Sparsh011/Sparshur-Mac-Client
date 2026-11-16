@@ -33,9 +33,9 @@ Charcoal surfaces, **#F72681**, dark appearance and shared **1.2×** typography.
 Apple frameworks only; no remote packages. This learning protocol requires human
 review and does not provide forward secrecy.
 
-![Native Messages view](docs/previews/messages.png)
+![Clipboard view](docs/previews/messages.png)
 
-[Pair phone](docs/previews/pair-phone.png) · [Learn](docs/previews/learn.png)
+[Devices](docs/previews/pair-phone.png) · [Learn](docs/previews/learn.png)
 
 ## Run
 
@@ -57,24 +57,36 @@ If macOS denies access, choose **Authorize existing identity** and approve the
 system Keychain prompt yourself. Rebuilt locally signed binaries may need fresh
 authorization. Missing/inaccessible state leaves receiving unavailable.
 
-Choose **Pair phone**, select the actual private IPv4 interface facing the phone,
-and create a five-minute QR. Scan and confirm on Android. The Mac marks pairing
+Open **Devices**, select the address the phone can reach, and create a
+five-minute QR. For devices on separate networks, connect both to the same
+Tailscale network and select **Private VPN**. The Android build must support
+paired-v2 VPN addresses. Scan and confirm on Android. The Mac marks pairing
 saved only after verifying and persisting the handshake. The trusted manual
 bundle is another way to transfer the same temporary secret; treat it like the QR.
 Use the separately labeled `10.0.2.2` option for the Android emulator.
 A listening socket does not prove hotspot, firewall or physical-phone reachability.
 
-Messages contains genuinely verified paired deliveries. Inspect shows the actual
-wire envelope and completed verification stages. Readable and phone-only AES
-comparison samples appear separately in Learn. HTTP replies never contain paired
-plaintext. Exact retries return signed duplicate receipts without another inbox row.
+**Clipboard** copies verified text and recognized images from the paired phone.
+Other attachments are available through **Save file…** in **Recent items**.
+**Copy** lets you paste an earlier clip again. **Devices**
+shows the saved phone, the time and route of its last verified contact this session,
+and whether this Mac is listening. Direct transfers use short-lived connections.
+Inspect shows the wire envelope and verification stages. Readable and phone-only
+AES samples appear in **Learn**. Exact retries return signed duplicate receipts
+without adding a row or writing the clipboard again. HTTP replies contain signed
+receipts for verified clips.
 History is memory-only, bounded to 40 observations; replay state persists in Keychain.
 
-The menu-bar item shares the same model and listener. Closing the window keeps
-receiving. Use **Open Sparshur** to reopen, **Pause receiving** to stop, and **Quit**
-to end the process. Sleep pauses receiving and discards the QR; wake attempts to
-resume if receiving was active. Quit the app before using the reference receiver;
-pause deliberately retains the identity ownership guard.
+Sparshur restores the saved pairing and starts the receiver at app launch, even
+with the main window closed. Android reuses the saved Mac address on its next
+send. After restarting either app, send a new clip using the existing pairing.
+A transfer interrupted by a shutdown may need to be sent again.
+
+The menu-bar item shares the same receiver. Use **Open Sparshur** to reopen the
+window, **Pause receiver** to stop receiving, and **Quit** to end the process.
+Sleep pauses receiving and discards the QR. Wake resumes the receiver if it was
+active. Quit the app before using the reference receiver. Pausing retains the
+identity ownership guard.
 
 Navigate with **⌘1/2/3**, **⌘,** Settings, **⌘[ / ⌘]** or **⌘{ / ⌘}**.
 Back/Forward stay visible and disabled at history boundaries. A new destination

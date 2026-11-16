@@ -17,6 +17,16 @@ final class PlatformTests: XCTestCase {
     }
   }
 
+  func testPrivateVPNAddressesUseCanonicalSharedIPv4Space() {
+    for host in ["100.64.0.0", "100.127.255.255"] {
+      XCTAssertTrue(privateVPNHost(host), host)
+      XCTAssertFalse(LocalAddress.isPrivateIPv4(host), host)
+    }
+    for host in ["100.63.255.255", "100.128.0.0", "100.064.0.1", "100.65.256.0", "::1"] {
+      XCTAssertFalse(privateVPNHost(host), host)
+    }
+  }
+
   func testEmulatorChoiceIsExplicitAndSeparateFromAnInterface() {
     XCTAssertTrue(LocalAddress.emulator.isEmulator)
     XCTAssertEqual(LocalAddress.emulator.host, "10.0.2.2")

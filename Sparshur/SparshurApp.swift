@@ -1,19 +1,14 @@
 import SwiftUI
 
 struct SparshurApp: App {
-  // The App owns this reference; changing screens never creates a second model.
-  @State private var model = AppModel()
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+  private var model: AppModel { delegate.model }
 
   var body: some Scene {
     Window("Sparshur", id: "main") {
       ContentView()
         .environment(model)
         .frame(minWidth: 720, minHeight: 520)
-        .onAppear {
-          delegate.model = model
-          model.beginSession()
-        }
     }
     .defaultSize(width: 1100, height: 760)
     .windowToolbarStyle(.unified)

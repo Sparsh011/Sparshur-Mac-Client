@@ -15,6 +15,8 @@ struct HTTPFailure: Error, Sendable {
 struct HTTPRequestParser {
   static let maxHeaders = 8192
   static let maxBody = 32768
+  static let maxFileBody = PairedFile.maxWireBytes
+  var receivesFile: Bool { path == "/paired-file" }
   private var buffer = Data()
   private var headerEnd: Int?
   private var length = 0
@@ -22,7 +24,7 @@ struct HTTPRequestParser {
   private var path = ""
 
   mutating func append(_ data: Data, port: UInt16) throws -> HTTPRequest? {
-    guard buffer.count + data.count <= Self.maxHeaders + Self.maxBody else {
+    guard buffer.count + data.count <= Self.maxHeaders + Self.maxFileBody else {
       throw HTTPFailure(413)
     }
     buffer.append(data)
@@ -45,7 +47,10 @@ struct HTTPRequestParser {
       guard
         (method == "GET" && path == "/health")
           || (method == "POST"
-            && ["/message", "/pairing/complete", "/paired-message"].contains(path))
+            && [
+              "/message", "/pairing/complete", "/paired-message", "/paired-file",
+              "/paired-file/pull", "/paired-file/ack",
+            ].contains(path))
       else { throw HTTPFailure(404) }
       var values: [String: String] = [:]
       for line in lines.dropFirst() {
@@ -72,7 +77,7 @@ struct HTTPRequestParser {
       }
       if let raw = values["content-length"] {
         guard !raw.isEmpty, raw.utf8.allSatisfy({ (48...57).contains($0) }),
-          let parsed = Int(raw), parsed <= Self.maxBody
+          let parsed = Int(raw), parsed <= (receivesFile ? Self.maxFileBody : Self.maxBody)
         else { throw HTTPFailure(413) }
         length = parsed
       } else if method == "POST" {

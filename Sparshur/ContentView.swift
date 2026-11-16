@@ -17,7 +17,7 @@ struct ContentView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(Theme.background)
-      .navigationTitle("Sparshur — \(model.destination.title)")
+      .navigationTitle("Sparshur")
       .toolbar {
         ToolbarItemGroup(placement: .navigation) {
           Button {
@@ -45,7 +45,8 @@ struct ContentView: View {
           StatusBadge(
             title: model.receiverStatus.shortTitle,
             symbol: model.receiverStatus == .listening
-              ? "antenna.radiowaves.left.and.right" : "circle.dashed"
+              ? "checkmark.circle.fill" : "circle.dashed",
+            color: model.receiverStatus == .listening ? Theme.success : nil
           )
           .labelStyle(.titleAndIcon)
           .help(model.receiverStatus.title)

@@ -5,8 +5,14 @@ struct StatusMenu: View {
   @Environment(\.openWindow) private var openWindow
   var body: some View {
     Text(model.receiverStatus.shortTitle)
+    if model.pairedSenderID != nil {
+      Text("Android phone paired")
+      if let contact = model.lastContact {
+        Text("Last contact · \(contact.date.formatted(date: .abbreviated, time: .shortened))")
+      }
+    }
     Button("Open Sparshur") { show(.messages) }
-    Button("Pair phone") { show(.pairPhone) }
+    Button("Devices") { show(.pairPhone) }
     Divider()
     if model.receiverStatus == .listening || model.receiverStatus == .starting {
       Button("Pause receiver") { model.pauseReceiver() }
@@ -25,33 +31,5 @@ struct StatusMenu: View {
     model.destination = destination
     openWindow(id: "main")
     NSApp.activate(ignoringOtherApps: true)
-  }
-}
-
-@MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
-  weak var model: AppModel?
-  private var observers: [NSObjectProtocol] = []
-  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-  func applicationDidFinishLaunching(_ notification: Notification) {
-    let center = NSWorkspace.shared.notificationCenter
-    observers.append(
-      center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) {
-        [weak self] _ in
-        Task { @MainActor in await self?.model?.sleep() }
-      })
-    observers.append(
-      center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) {
-        [weak self] _ in
-        Task { @MainActor in await self?.model?.wake() }
-      })
-  }
-  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    guard let model else { return .terminateNow }
-    Task {
-      await model.shutdown()
-      sender.reply(toApplicationShouldTerminate: true)
-    }
-    return .terminateLater
   }
 }

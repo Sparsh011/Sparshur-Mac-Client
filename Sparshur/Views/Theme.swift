@@ -10,6 +10,7 @@ enum Theme {
   }
 
   static let pink = Color(red: 247 / 255, green: 38 / 255, blue: 129 / 255)
+  static let success = Color(red: 0.47, green: 0.84, blue: 0.66)
   static let background = Color(red: 0.075, green: 0.075, blue: 0.085)
   static let sidebar = Color(red: 0.092, green: 0.092, blue: 0.105)
   static let surface = Color(red: 0.105, green: 0.105, blue: 0.12)
@@ -62,12 +63,14 @@ struct StatusBadge: View {
   let title: String
   var symbol = "circle"
   var accented = false
+  var color: Color? = nil
   var body: some View {
+    let foreground = color ?? (accented ? Theme.pink : Theme.secondary)
     Label(title, systemImage: symbol)
       .font(Theme.font(10, weight: .medium))
-      .foregroundStyle(accented ? Theme.pink : Theme.secondary)
+      .foregroundStyle(foreground)
       .padding(.horizontal, 9).padding(.vertical, 5)
-      .background(accented ? Theme.pink.opacity(0.1) : Theme.raised)
+      .background(accented || color != nil ? foreground.opacity(0.1) : Theme.raised)
       .clipShape(Capsule())
       .fixedSize()
   }

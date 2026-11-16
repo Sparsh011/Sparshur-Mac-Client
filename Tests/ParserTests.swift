@@ -50,9 +50,19 @@ final class ParserTests: XCTestCase {
     for peer in ["10.1.2.3", "192.168.1.1", "172.31.0.1", "127.0.0.2"] {
       XCTAssertTrue(LocalHTTPServer.allowedPeer(peer))
     }
-    for peer in ["8.8.8.8", "::1", "0.0.0.0", "127.999.0.1", "10.00.1.1", "172.32.0.1"] {
+    for peer in [
+      "8.8.8.8", "::1", "0.0.0.0", "127.999.0.1", "10.00.1.1", "172.32.0.1", "100.90.20.11",
+    ] {
       XCTAssertFalse(LocalHTTPServer.allowedPeer(peer))
     }
+  }
+  func testVPNDestinationRequiresAnActiveMatchingTunnelAddress() {
+    let vpn = LocalAddress(interface: "utun4", host: "100.90.20.10", isEmulator: false)
+    let carrier = LocalAddress(interface: "en0", host: vpn.host, isEmulator: false)
+    XCTAssertTrue(LocalHTTPServer.allowedVPNDestination(vpn.host, addresses: [vpn]))
+    XCTAssertFalse(LocalHTTPServer.allowedVPNDestination(vpn.host, addresses: [carrier]))
+    XCTAssertFalse(LocalHTTPServer.allowedVPNDestination(vpn.host, addresses: []))
+    XCTAssertFalse(LocalHTTPServer.allowedVPNDestination("192.168.1.10", addresses: [vpn]))
   }
   func testStrictJSONRejectsDuplicateKeysIncludingEscapes() throws {
     let invalid = [

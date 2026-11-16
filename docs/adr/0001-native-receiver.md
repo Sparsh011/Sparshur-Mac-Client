@@ -3,9 +3,17 @@
 Status: implemented; protected-item integration passed. Physical and interactive
 checks remain tracked separately in VERIFICATION.md.
 
-Use Apple's Network framework with a deliberately narrow, bounded HTTP/1.1 parser
-rather than introducing a server package. Maintain the Android debug wire contract.
+Use a BSD TCP listener with DispatchIO and a deliberately narrow, bounded HTTP/1.1
+parser. Maintain the Android debug wire contract. On the development Mac, the
+Network.framework listener timed out on the active tunnel address with both
+wildcard and explicit binds. The BSD listener accepts that address on the same port.
 Reject ambiguous framing before dispatch; close every connection after one request.
+
+Pairing over a private VPN uses the existing paired-v2 QR and HTTP routes. Offer
+IPv4 addresses from `100.64.0.0/10` on active macOS tunnel interfaces. For peers
+from that range, require the connection to target one of those addresses before
+dispatch. The `/message` comparison route remains available to LAN and loopback
+peers. The direct receiver and the outbound hosted relay have separate settings.
 
 Extract the tested Swift reference crypto/Keychain implementation into the Mac
 source tree. The native app and sibling CLI compile those same files. Keep the CLI

@@ -5,20 +5,17 @@ struct LocalAddress: Identifiable, Sendable, Equatable {
   let interface: String
   let host: String
   let isEmulator: Bool
+  var isPrivateVPN: Bool { interface.hasPrefix("utun") && privateVPNHost(host) }
   var id: String { "\(interface)/\(host)" }
-  var label: String { isEmulator ? "Android emulator only" : "\(interface) · \(host)" }
+  var label: String {
+    if isEmulator { return "Android emulator only" }
+    return "\(isPrivateVPN ? "Private VPN" : interface) · \(host)"
+  }
 
   static let emulator = LocalAddress(interface: "emulator", host: "10.0.2.2", isEmulator: true)
 
   static func isPrivateIPv4(_ host: String) -> Bool {
-    let parts = host.split(separator: ".", omittingEmptySubsequences: false)
-    guard parts.count == 4 else { return false }
-    let octets = parts.compactMap { Int($0) }
-    guard octets.count == 4,
-      zip(parts, octets).allSatisfy({ String($0.1) == $0.0 && (0...255).contains($0.1) })
-    else { return false }
-    return octets[0] == 10 || (octets[0] == 172 && (16...31).contains(octets[1]))
-      || (octets[0] == 192 && octets[1] == 168)
+    host != "127.0.0.1" && localHost(host)
   }
 
   static func discover() throws -> [LocalAddress] {
@@ -43,9 +40,12 @@ struct LocalAddress: Identifiable, Sendable, Equatable {
       else { continue }
       let host = String(
         decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
-      guard isPrivateIPv4(host) else { continue }
       let found = LocalAddress(
         interface: String(cString: interface.ifa_name), host: host, isEmulator: false)
+      guard
+        isPrivateIPv4(host)
+          || (found.isPrivateVPN && interface.ifa_flags & UInt32(IFF_POINTOPOINT) != 0)
+      else { continue }
       if !result.contains(found) { result.append(found) }
     }
     return result.sorted { ($0.interface, $0.host) < ($1.interface, $1.host) } + [.emulator]

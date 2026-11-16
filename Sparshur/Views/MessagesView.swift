@@ -1,111 +1,186 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MessagesView: View {
   @Environment(AppModel.self) private var model
-  @AppStorage("showExplanations") private var showExplanations = true
   @State private var inspected: LocalObservation?
+  @State private var choosingFile = false
+  @State private var saveError = false
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 24) {
-        PageHeader(
-          eyebrow: "Your local inbox", title: "Messages",
-          subtitle: "Messages from your Android phone, verified on this Mac.")
-        ViewThatFits(in: .horizontal) {
-          HStack(spacing: 12) {
-            SummaryCard(
-              symbol: "iphone", title: "PAIRED PHONE", value: model.pairingSummary,
-              detail: model.pairingDetail)
-            SummaryCard(
-              symbol: "antenna.radiowaves.left.and.right", title: "RECEIVER",
-              value: model.receiverStatus == .listening ? "Listening" : "Not receiving",
-              detail: "Local HTTP · port 8787")
-            SummaryCard(
-              symbol: "checkmark.shield", title: "VERIFIED MESSAGES",
-              value: "\(model.verifiedCount)", detail: "Accepted in this session")
-          }
-          Panel {
-            VStack(alignment: .leading, spacing: 10) {
-              Text("Phone: \(model.pairingSummary)")
-              Text(model.receiverStatus.title)
-              Text("Verified messages: \(model.verifiedCount)")
-            }.font(Theme.font(11)).foregroundStyle(Theme.secondary).frame(
-              maxWidth: .infinity, alignment: .leading
-            ).padding(17)
+        VStack(alignment: .leading, spacing: 7) {
+          Text("Clipboard")
+            .font(Theme.font(29, weight: .semibold)).tracking(-0.8)
+            .foregroundStyle(Theme.text)
+          Text("Verified text and images from Android are copied to this Mac.")
+            .font(Theme.font(12)).foregroundStyle(Theme.secondary)
+        }
+        clipboardStatus
+        HStack {
+          Button("Send file to Android…") { choosingFile = true }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(
+              model.pairedSenderID == nil || model.receiverStatus != .listening
+                || model.hasOutgoingFile || model.isQueueingFile)
+          if model.hasOutgoingFile {
+            Button("Cancel queued file") { Task { await model.cancelOutgoingFile() } }
+              .buttonStyle(SecondaryButtonStyle())
           }
         }
+        if let status = model.fileStatus {
+          Text(status).font(Theme.font(12)).foregroundStyle(Theme.secondary)
+        }
         Panel {
-          VStack(spacing: 0) {
-            HStack {
-              Label("Inbox", systemImage: "tray").font(Theme.font(12, weight: .semibold))
-              StatusBadge(title: "\(model.verifiedMessages.count) displayed")
-              Spacer()
-            }.padding(17).foregroundStyle(Theme.text)
+          VStack(alignment: .leading, spacing: 0) {
+            Text("Recent items")
+              .font(Theme.font(13, weight: .semibold)).foregroundStyle(Theme.text)
+              .padding(17)
             Divider().overlay(Theme.border)
             if model.verifiedMessages.isEmpty {
-              VStack(spacing: 14) {
-                DeviceIllustration()
-                Text(
-                  model.savedIdentity?.senderID == nil
-                    ? "Your first message starts here"
-                    : "Ready for a message from your paired phone"
-                )
-                .font(Theme.font(19, weight: .medium)).foregroundStyle(Theme.text)
-                .multilineTextAlignment(.center)
-                Text(
-                  model.receiverStatus == .listening
-                    ? "Send a message from Android. Verified deliveries appear here."
-                    : "Start the receiver to accept messages from your phone."
-                )
-                .font(Theme.font(12)).foregroundStyle(Theme.secondary).multilineTextAlignment(
-                  .center)
-                Button {
-                  model.destination = .pairPhone
-                } label: {
-                  Label("Pair phone", systemImage: "qrcode")
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                Button("How does pairing work?") { model.showLesson(.pairing) }
-                  .buttonStyle(.plain).font(Theme.font(11)).foregroundStyle(Theme.secondary)
-              }.padding(30).frame(maxWidth: .infinity)
+              emptyState
             } else {
               LazyVStack(spacing: 0) {
                 ForEach(model.verifiedMessages) { observation in
-                  ObservationRow(observation: observation) { inspected = observation }
+                  clipRow(observation)
                   Divider().overlay(Theme.border)
                 }
               }
-            }
-            HStack {
-              Label("Last 40 observations · memory only", systemImage: "clock.arrow.circlepath")
-              Spacer()
-              Text("\(model.duplicateCount) duplicates")
-            }.font(Theme.font(10)).foregroundStyle(Theme.muted).padding(14)
-          }
-        }
-        if model.receiverStatus != .listening {
-          HStack {
-            Text(model.receiverStatus.title).font(Theme.font(11)).foregroundStyle(Theme.secondary)
-            Spacer()
-            if model.needsIdentityAccess {
-              Button("Authorize existing identity…") { Task { await model.authorizeIdentity() } }
-                .buttonStyle(SecondaryButtonStyle()).disabled(model.isAuthorizingIdentity)
-            } else {
-              Button("Start receiver") { model.resumeReceiver() }.buttonStyle(
-                SecondaryButtonStyle()
-              ).disabled(model.receiverStatus == .starting)
+              Text("Recent items are kept until you quit Sparshur.")
+                .font(Theme.font(10)).foregroundStyle(Theme.secondary).padding(15)
             }
           }
         }
-        if showExplanations {
-          Explanation(
-            title: "What gets verified?",
-            text:
-              "Sender signature → key unwrap → payload verification → saved replay state → signed receipt. Readable and phone-only samples appear separately in Learn."
-          )
+      }
+      .padding(28).frame(maxWidth: 870).frame(maxWidth: .infinity)
+    }
+    .sheet(item: $inspected) { MessageInspector(observation: $0) }
+    .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.data]) { result in
+      switch result {
+      case .success(let url): Task { await model.queueFile(at: url) }
+      case .failure: model.fileStatus = "Couldn’t open the chosen file."
+      }
+    }
+    .alert("Couldn’t save the file", isPresented: $saveError) {
+      Button("OK", role: .cancel) {}
+    }
+  }
+
+  private func save(_ file: PairedFile) {
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = file.name
+    panel.begin { response in
+      guard response == .OK, let url = panel.url else { return }
+      do { try file.data.write(to: url, options: .atomic) } catch { saveError = true }
+    }
+  }
+
+  private var clipboardStatus: some View {
+    let update = model.clipboardUpdate
+    let hasError = update?.succeeded == false
+    let symbol = hasError ? "exclamationmark.circle" : update == nil ? "clipboard" : "checkmark"
+    return Panel {
+      HStack(spacing: 14) {
+        Image(systemName: symbol)
+          .font(Theme.font(16, weight: .semibold))
+          .foregroundStyle(hasError ? .orange : update == nil ? Theme.secondary : Theme.success)
+          .frame(width: 40, height: 40)
+          .background(Theme.raised, in: RoundedRectangle(cornerRadius: 9))
+          .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(statusTitle)
+            .font(Theme.font(13, weight: .semibold)).foregroundStyle(Theme.text)
+          Text(statusDetail)
+            .font(Theme.font(11)).foregroundStyle(Theme.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
-      }.padding(30).frame(maxWidth: 1060).frame(maxWidth: .infinity)
-    }.sheet(item: $inspected) { MessageInspector(observation: $0) }
+        Spacer(minLength: 8)
+        if let latest = model.verifiedMessages.first(where: { $0.clipboardContent != nil }) {
+          Button("Copy latest") { model.copyToClipboard(latest) }
+            .buttonStyle(SecondaryButtonStyle())
+        }
+      }
+      .padding(16)
+    }
+  }
+
+  private var statusTitle: String {
+    if let update = model.clipboardUpdate {
+      return update.succeeded ? "Copied to clipboard" : "Clipboard write failed"
+    }
+    if model.receiverStatus != .listening { return model.receiverStatus.shortTitle }
+    return model.pairedSenderID == nil ? "Pair a phone to receive clips" : "Ready for a clip"
+  }
+
+  private var statusDetail: String {
+    if let update = model.clipboardUpdate {
+      if !update.succeeded { return "Use Copy on a clip below to try again." }
+      return "Last copied at \(update.date.formatted(date: .omitted, time: .shortened))."
+    }
+    if model.receiverStatus != .listening {
+      return "Check the receiver in Devices before sending."
+    }
+    if let contact = model.lastContact {
+      return "Android reached this Mac over \(contact.route.lowercased())."
+    }
+    return model.pairedSenderID == nil
+      ? "Get a pairing code from Devices."
+      : "Open Sparshur on Android and send what you copied."
+  }
+
+  private var emptyState: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("No items received yet")
+        .font(Theme.font(18, weight: .semibold)).foregroundStyle(Theme.text)
+      Text(
+        model.pairedSenderID == nil
+          ? "Pair your Android phone to send text, images, and files."
+          : "Send something from Sparshur on Android to see it here."
+      )
+      .font(Theme.font(12)).foregroundStyle(Theme.secondary)
+      Button(model.pairedSenderID == nil ? "Open Devices" : "Check phone activity") {
+        model.destination = .pairPhone
+      }
+      .buttonStyle(SecondaryButtonStyle())
+      .padding(.top, 4)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(24)
+  }
+
+  private func clipRow(_ observation: LocalObservation) -> some View {
+    HStack(alignment: .top, spacing: 16) {
+      VStack(alignment: .leading, spacing: 8) {
+        Text(observation.file?.name ?? observation.plaintext ?? "")
+          .font(Theme.font(13)).foregroundStyle(Theme.text)
+          .lineLimit(4).textSelection(.enabled)
+        Label(
+          observation.receivedAt.formatted(date: .abbreviated, time: .shortened),
+          systemImage: "checkmark.shield"
+        )
+        .font(Theme.font(10)).foregroundStyle(Theme.secondary)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      if observation.clipboardContent != nil {
+        Button("Copy", systemImage: "doc.on.doc") { model.copyToClipboard(observation) }
+          .labelStyle(.titleAndIcon)
+          .buttonStyle(SecondaryButtonStyle())
+      }
+      if let file = observation.file {
+        Button("Save file…") { save(file) }.buttonStyle(SecondaryButtonStyle())
+      } else {
+        Button {
+          inspected = observation
+        } label: {
+          Label("Inspect message", systemImage: "info.circle").labelStyle(.iconOnly)
+        }
+        .buttonStyle(SecondaryButtonStyle())
+        .help("Inspect message")
+      }
+    }
+    .padding(17)
   }
 }
 
@@ -132,63 +207,5 @@ struct ObservationRow: View {
         .fixedSize(horizontal: false, vertical: true)
       Button("Inspect") { inspect() }.buttonStyle(SecondaryButtonStyle())
     }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-  }
-}
-
-private struct SummaryCard: View {
-  let symbol: String
-  let title: String
-  let value: String
-  let detail: String
-  var body: some View {
-    Panel {
-      VStack(alignment: .leading, spacing: 11) {
-        HStack(spacing: 7) {
-          Image(systemName: symbol).font(Theme.font(12)).foregroundStyle(Theme.pink)
-          Text(title).font(Theme.font(8, weight: .medium)).tracking(0.8)
-            .foregroundStyle(Theme.secondary)
-        }
-        Text(value).font(Theme.font(17, weight: .medium)).foregroundStyle(Theme.text)
-        Text(detail).font(Theme.font(10)).foregroundStyle(Theme.muted)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading).padding(17)
-    }
-    .fixedSize(horizontal: false, vertical: true)
-  }
-}
-
-struct DeviceIllustration: View {
-  var body: some View {
-    HStack(spacing: 15) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 9).fill(Theme.raised).frame(width: 43, height: 70)
-        RoundedRectangle(cornerRadius: 9).stroke(Theme.secondary.opacity(0.45)).frame(
-          width: 43, height: 70)
-        VStack {
-          Capsule().fill(Theme.muted).frame(width: 12, height: 2).padding(.top, 7)
-          Spacer()
-          Image(systemName: "bubble.left.fill").font(Theme.font(16)).foregroundStyle(Theme.pink)
-          Spacer()
-          Capsule().fill(Theme.muted).frame(width: 13, height: 2).padding(.bottom, 6)
-        }.frame(width: 43, height: 70)
-      }
-      HStack(spacing: 5) {
-        ForEach(0..<3) { _ in Circle().fill(Theme.pink.opacity(0.4)).frame(width: 3, height: 3) }
-        Image(systemName: "lock.fill").font(Theme.font(10)).foregroundStyle(Theme.pink)
-        ForEach(0..<3) { _ in Circle().fill(Theme.pink.opacity(0.4)).frame(width: 3, height: 3) }
-      }
-      VStack(spacing: 0) {
-        RoundedRectangle(cornerRadius: 6).fill(Theme.raised)
-          .frame(width: 85, height: 55)
-          .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.secondary.opacity(0.45)))
-          .overlay(
-            Image(systemName: "checkmark.shield").font(Theme.font(20)).foregroundStyle(
-              Theme.pink))
-        Rectangle().fill(Theme.secondary.opacity(0.4)).frame(width: 12, height: 8)
-        Capsule().fill(Theme.secondary.opacity(0.4)).frame(width: 40, height: 2)
-      }
-    }
-    .frame(height: 85)
-    .accessibilityHidden(true)
   }
 }

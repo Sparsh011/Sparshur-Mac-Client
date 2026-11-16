@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import UniformTypeIdentifiers
 
 struct PairingCode: Sendable {
   let revision: UInt64
@@ -17,13 +18,35 @@ struct WireReceipt: Sendable {
 
 struct LocalObservation: Identifiable, Sendable {
   enum Kind: String, Sendable { case paired, readable, phoneOnly }
+  enum ClipboardContent {
+    case text(String)
+    case image(Data, UTType)
+  }
   let id: String
   let receivedAt: Date
   let kind: Kind
   let plaintext: String?
   let envelope: Data
+  var file: PairedFile? = nil
   let sender: String?
   let stages: [String]
+
+  var clipboardContent: ClipboardContent? {
+    guard kind == .paired else { return nil }
+    if let file {
+      guard let type = file.imageType else { return nil }
+      return .image(file.data, type)
+    }
+    return plaintext.map(ClipboardContent.text)
+  }
+}
+
+struct PeerContact: Sendable {
+  let senderID: String
+  let date: Date
+  let overPrivateVPN: Bool
+
+  var route: String { overPrivateVPN ? "Private VPN" : "Local network" }
 }
 
 enum ReceiverStatus: Equatable, Sendable {
@@ -44,7 +67,7 @@ enum ReceiverStatus: Equatable, Sendable {
     switch self {
     case .stopped: "Receiver stopped"
     case .starting: "Starting receiver…"
-    case .listening: "Receiving on 8787"
+    case .listening: "Receiver ready"
     case .paused: "Receiver paused"
     case .failed: "Receiver unavailable"
     case .identityAccessRequired: "Keychain access required"
@@ -54,7 +77,10 @@ enum ReceiverStatus: Equatable, Sendable {
 
 enum ServiceEvent: Sendable {
   case observation(LocalObservation)
+  case peerContact(PeerContact)
   case duplicate
+  case outgoingFileQueued(name: String)
+  case outgoingFileCleared(delivered: Bool)
   case identity(PublicIdentity)
   case pairingCleared(UInt64)
   case status(ReceiverStatus)
@@ -74,6 +100,12 @@ actor EndpointService {
   private var endpoint: Endpoint?
   private var active = false
   private var samples: [String: Data] = [:]
+  private struct OutgoingFile {
+    let id: String
+    let pairing: String
+    let payload: Data
+  }
+  private var outgoingFile: OutgoingFile?
   private var pendingExpiry: Date?
   private var pairingRevision: UInt64 = 0
   private let store: ProtectedStore
@@ -142,13 +174,16 @@ actor EndpointService {
     pairingRevision += 1
     publish(.pairingCleared(pairingRevision))
   }
-  func createPairing(host: String, port: Int = 8787, now: Date = .now) throws -> PairingCode {
+  func createPairing(
+    host: String, port: Int = 8787, now: Date = .now, overPrivateVPN: Bool = false
+  ) throws -> PairingCode {
     guard active, let endpoint else { throw Rejected.state }
     endpoint.cancelPairing()
     pendingExpiry = nil
     pairingRevision += 1
     let result = try endpoint.newPair(
-      ["host": host, "port": port], now: Int(now.timeIntervalSince1970))
+      ["host": host, "port": port], now: Int(now.timeIntervalSince1970),
+      overPrivateVPN: overPrivateVPN)
     let expiry = Date(timeIntervalSince1970: Double(try number(result, "expires_at")))
     pendingExpiry = expiry
     guard let png = result["qr_png"] as? String else { throw Rejected.state }
@@ -168,8 +203,19 @@ actor EndpointService {
           highestCounter: status["highest"] as? Int)))
   }
 
-  func handle(_ request: HTTPRequest) -> EndpointResponse {
+  func queueFile(_ file: PairedFile) throws {
+    guard active, let endpoint, outgoingFile == nil else { throw Rejected.state }
+    outgoingFile = try OutgoingFile(
+      id: UUID().uuidString.lowercased(), pairing: endpoint.activePairingID(),
+      payload: file.encode())
+    publish(.outgoingFileQueued(name: file.name))
+  }
+
+  func cancelOutgoingFile() { outgoingFile = nil }
+
+  func handle(_ request: HTTPRequest, overPrivateVPN: Bool = false) -> EndpointResponse {
     guard active, !Task.isCancelled, let endpoint else { return .failure(503) }
+    if overPrivateVPN && request.path == "/message" { return .failure(404) }
     do {
       if request.method == "GET", request.path == "/health" {
         return EndpointResponse(
@@ -177,29 +223,58 @@ actor EndpointService {
           body: Data("{\"service\":\"bridge-learning-observer\",\"lab_version\":1}".utf8))
       }
       guard request.method == "POST" else { return .failure(405) }
-      let body = try StrictJSON.decodeObject(request.body)
+      let body = try StrictJSON.decodeObject(
+        request.body, maxBytes: request.path == "/paired-file" ? PairedFile.maxWireBytes : 65_536)
       switch request.path {
       case "/pairing/complete":
         let acknowledgement = try endpoint.pair(body)
+        if let queued = outgoingFile, queued.pairing != (try endpoint.activePairingID()) {
+          outgoingFile = nil
+          publish(.outgoingFileCleared(delivered: false))
+        }
         pendingExpiry = nil
         pairingRevision += 1
         publish(.pairingCleared(pairingRevision))
         try publishIdentity()
+        publish(.peerContact(try contact(body, overPrivateVPN: overPrivateVPN)))
         return EndpointResponse(status: 200, body: try json(acknowledgement))
-      case "/paired-message":
-        let result = try endpoint.receive(body)
+      case "/paired-file/pull":
+        let result = try endpoint.receive(body, type: "file_pull")
+        guard let key = result["response_key"] as? Data else { throw Rejected.invalid }
+        let response = try queuedFileResponse(
+          key: key, request: body, id: outgoingFile?.id ?? "",
+          payload: outgoingFile?.payload ?? Data())
+        try publishIdentity()
+        publish(.peerContact(try contact(body, overPrivateVPN: overPrivateVPN)))
+        return EndpointResponse(status: 200, body: try json(response))
+      case "/paired-file/ack":
+        let result = try endpoint.receive(body, type: "file_ack")
+        guard let receipt = result["receipt"] as? Object else { throw Rejected.state }
+        if let id = result["ack_file_id"] as? String, id == outgoingFile?.id {
+          outgoingFile = nil
+          publish(.outgoingFileCleared(delivered: true))
+        }
+        try publishIdentity()
+        publish(.peerContact(try contact(body, overPrivateVPN: overPrivateVPN)))
+        return EndpointResponse(status: 200, body: try json(receipt))
+      case "/paired-message", "/paired-file":
+        let isFile = request.path == "/paired-file"
+        let result = try endpoint.receive(body, type: isFile ? "file" : "text")
         guard let receiptObject = result["receipt"] as? Object,
           let duplicate = receiptObject["duplicate"] as? Bool
         else { throw Rejected.state }
         let receipt = WireReceipt(body: try json(receiptObject), duplicate: duplicate)
         try publishIdentity()
+        let contact = try contact(body, overPrivateVPN: overPrivateVPN)
+        publish(.peerContact(contact))
         if duplicate {
           publish(.duplicate)
         } else {
           let observation = LocalObservation(
-            id: try text(body, "message_id"), receivedAt: .now,
-            kind: .paired, plaintext: try text(result, "decrypted_text"), envelope: request.body,
-            sender: try text(body, "sender_id"),
+            id: try text(body, "message_id"), receivedAt: contact.date,
+            kind: .paired, plaintext: result["decrypted_text"] as? String,
+            envelope: isFile ? Data() : request.body, file: result["decrypted_file"] as? PairedFile,
+            sender: contact.senderID,
             stages: [
               "Received", "Sender verified", "Key unwrapped",
               "Payload verified and decrypted", "Replay state saved", "Receipt signed",
@@ -224,6 +299,10 @@ actor EndpointService {
       publish(.rejected)
       return .failure(400)
     }
+  }
+
+  private func contact(_ body: Object, overPrivateVPN: Bool) throws -> PeerContact {
+    PeerContact(senderID: try text(body, "sender_id"), date: .now, overPrivateVPN: overPrivateVPN)
   }
 
   private func acceptSample(_ body: Object, raw: Data) throws -> EndpointResponse {

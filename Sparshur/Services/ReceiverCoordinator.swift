@@ -2,12 +2,21 @@ import Foundation
 import Network
 
 actor ReceiverCoordinator {
+  enum PairingError: Error { case vpnAddressUnavailable }
+
   nonisolated let events: AsyncStream<ServiceEvent>
   private let continuation: AsyncStream<ServiceEvent>.Continuation
   private let service: EndpointService
   private let server: LocalHTTPServer
   private var requested = false
+  private var shuttingDown = false
   private var pathMonitor: NWPathMonitor?
+  func queueFile(_ file: PairedFile) async throws {
+    try await service.queueFile(file)
+  }
+
+  func cancelOutgoingFile() async { await service.cancelOutgoingFile() }
+
   private var relay: RelayClient?
   private let relayEnvironment: [String: String]
 
@@ -26,7 +35,7 @@ actor ReceiverCoordinator {
     self.relayEnvironment = relayEnvironment
   }
   func start() async {
-    guard !requested else { return }
+    guard !shuttingDown, !requested else { return }
     requested = true
     if pathMonitor == nil {
       let monitor = NWPathMonitor()
@@ -65,7 +74,7 @@ actor ReceiverCoordinator {
     continuation.yield(.status(.paused))
   }
   func authorizeIdentity() async {
-    guard !requested else { return }
+    guard !shuttingDown, !requested else { return }
     requested = true
     do {
       try await service.authorizeIdentity()
@@ -79,8 +88,11 @@ actor ReceiverCoordinator {
           .identityAccessRequired("Keychain authorization did not complete; identity preserved")))
     }
   }
-  func createPairing(host: String) async throws -> PairingCode {
-    try await service.createPairing(host: host)
+  func createPairing(at address: LocalAddress) async throws -> PairingCode {
+    if address.isPrivateVPN, (try? LocalAddress.discover().contains(address)) != true {
+      throw PairingError.vpnAddressUnavailable
+    }
+    return try await service.createPairing(host: address.host, overPrivateVPN: address.isPrivateVPN)
   }
   func stopAfterFailure() async {
     requested = false
@@ -128,6 +140,8 @@ actor ReceiverCoordinator {
     }
   }
   func shutdown() async {
+    guard !shuttingDown else { return }
+    shuttingDown = true
     pathMonitor?.cancel()
     pathMonitor = nil
     await pause()

@@ -98,6 +98,15 @@ struct SettingsView: View {
                 )
               }.padding(18)
             }
+            if let enrollment = model.relayEnrollment {
+              Panel {
+                VStack(alignment: .leading, spacing: 12) {
+                  Text("Public enrollment details").font(Theme.font(13, weight: .semibold))
+                  enrollmentValue("Device ID", value: enrollment.deviceID)
+                  enrollmentValue("Ed25519 public key (Base64)", value: enrollment.signingPublicKey)
+                }.padding(18)
+              }
+            }
             if let checkedAt = model.checkedAt {
               Text("Last checked \(checkedAt.formatted(date: .omitted, time: .standard))")
                 .font(Theme.font(10)).foregroundStyle(Theme.muted)
@@ -114,6 +123,22 @@ struct SettingsView: View {
     .frame(width: 600, height: 490)
     .font(Theme.font(13))
     .background(Theme.background)
+  }
+
+  private func enrollmentValue(_ title: String, value: String) -> some View {
+    HStack {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title).font(Theme.font(11)).foregroundStyle(Theme.secondary)
+        Text(value).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+      }
+      Spacer()
+      Button("Copy") {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+      }
+      .buttonStyle(SecondaryButtonStyle())
+      .accessibilityLabel("Copy " + title)
+    }
   }
 
   private func diagnostic(title: String, value: String, detail: String) -> some View {

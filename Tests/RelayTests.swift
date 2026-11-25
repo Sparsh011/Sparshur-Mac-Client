@@ -12,10 +12,15 @@ private let sessionID = "44444444-4444-4444-8444-444444444444"
 final class RelayTests: XCTestCase {
   func testConfigurationRefusesDowngradesCredentialsAndAmbiguousURLs() throws {
     _ = try config()
+    let explicitPort = "wss://relay.example:443/v1/relay"
+    XCTAssertEqual(
+      try RelayConfiguration(url: explicitPort, relayID: "mini-test").url.absoluteString,
+      explicitPort)
     for url in [
       "ws://relay.example/v1/relay", "https://relay.example/v1/relay",
       "wss://user:password@relay.example/v1/relay", "wss://relay.example/v1/relay?token=secret",
       "wss://relay.example/v1/relay#fragment", "wss://relay.example/other",
+      "wss://relay.example/v1/%72elay",
       "wss://relay.example:0/v1/relay", "wss://relay.example:65536/v1/relay",
     ] {
       XCTAssertThrowsError(try RelayConfiguration(url: url, relayID: "mini-test"))
@@ -125,13 +130,20 @@ final class RelayTests: XCTestCase {
     let before = memory.data
     let current = challenge(nonce: Data(repeating: 7, count: 32))
     let endpoint = try Endpoint(memory, allowCreate: false)
+    XCTAssertEqual(endpoint.relaySigningPublicKey(), key.publicKey.rawRepresentation)
     _ = try endpoint.signRelayAuthentication(
       relayURL: "wss://relay.example/v1/relay", relayID: current.relayID,
       sessionID: current.sessionID, clientNonce: current.clientNonce,
       challenge: current.challenge, expiresAt: current.expiresAt)
     XCTAssertEqual(memory.data, before)  // Authentication must not rewrite pairing/replay state.
     let service = EndpointService(store: try fixtureStore(), publish: { _ in })
+    do {
+      _ = try await service.relaySigningPublicKey()
+      XCTFail("Public enrollment accessed without a loaded identity")
+    } catch {}
     try await service.activate()
+    let enrollmentKey = try await service.relaySigningPublicKey()
+    XCTAssertEqual(enrollmentKey, key.publicKey.rawRepresentation)
     let signature = try await service.signRelayChallenge(current, configuration: config())
     XCTAssertTrue(
       try key.publicKey.isValidSignature(
@@ -141,6 +153,15 @@ final class RelayTests: XCTestCase {
       _ = try await service.signRelayChallenge(current, configuration: config())
       XCTFail("Paused signer accepted")
     } catch {}
+  }
+
+  func testEnrollmentAndReplacementCloseCodesBlockReconnect() {
+    for code in [4401, 4403, 4409] {
+      let remoteCode = URLSessionWebSocketTask.CloseCode(rawValue: code)
+      XCTAssertEqual(remoteCode.map { relayCloseError($0.rawValue) }, .some(.authentication))
+    }
+    XCTAssertNil(relayCloseError(1001))
+    XCTAssertEqual(relayCloseError(1002), .malformedFrame)
   }
 
   func testAuthenticatedSendAndReceiveKeepForwardingSeparateFromProcessing() async throws {

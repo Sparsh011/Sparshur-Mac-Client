@@ -11,10 +11,12 @@ struct RelayConfiguration: Sendable {
   let relayID: String
 
   init(url: String, relayID: String) throws {
-    guard url.utf8.count <= 2048, let parts = URLComponents(string: url), parts.scheme == "wss",
+    guard url.utf8.count <= 2048, !url.contains("|"), let parts = URLComponents(string: url),
+      parts.scheme == "wss",
       let host = parts.host, !host.isEmpty, host == host.lowercased(),
       parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
-      parts.path == "/v1/relay", parts.port == nil || (1...65535).contains(parts.port!),
+      parts.percentEncodedPath == "/v1/relay",
+      parts.port == nil || (1...65535).contains(parts.port!),
       let parsed = parts.url, parsed.absoluteString == url,
       !relayID.isEmpty, relayID.utf8.count <= 128,
       relayID.utf8.allSatisfy({ (33...126).contains($0) && $0 != 124 })

@@ -1,35 +1,27 @@
 # Relay transport verification
 
-2026-10-24. Local implementation candidate; no mini deployment or real Android
-relay interoperability is claimed.
+The Mac, Android and Go relay use the shared [transport contract](../spec/PROTOCOL.md).
+The authentication and nine protobuf frame fixtures are frozen under
+[`spec/vectors`](../spec/vectors). Each project checks the same byte sequences.
+Fixture signing keys are public test material.
 
-- Full Swift suite: **40 tests passed**, including **13 relay tests**. Tests use
-  public/disposable keys and in-memory stores, never the login Keychain.
-- Full Xcode Debug macOS app: **BUILD SUCCEEDED** with local ad-hoc signing.
-- Strict swift-format lint across app, tests and existing preview tool: passed.
-- The original local paired-v2 frozen Android decryption/receipt test and QR/core
-  tests still pass. Core also compiles independently, preserving the reference
-  CLI's no-networking dependency boundary.
-- Authentication signature vector is verified, not compared to a newly generated
-  signature: compatible Ed25519 implementations can randomize their signing
-  procedure while still producing valid standard signatures.
-- Independent Python stdlib protobuf fixtures cover all nine frame kinds.
-  Truncation tests, duplicate/unknown fields, varint overflow/overlong encodings,
-  strict recipient checks and bounded deterministic parser fuzzing are included.
-- Injected socket tests verify real CryptoKit challenge signatures, out-of-order
-  authentication rejection, nonce/relay/expiry binding, fresh nonce on reconnect,
-  byte-preserving retries, per-submission forwarding correlation, mismatched
-  digests, pending-write bounds, stop fencing, timeout closure, and upgrade-required
-  behavior without a fabricated endpoint receipt.
+The Mac relay tests verify CryptoKit signatures over the shared auth transcript,
+all nine wire fixtures, strict parsing, challenge ordering and expiry,
+reconnects with fresh nonces, bounded pending sends and acknowledgement
+correlation. The relay tests also check that the loaded identity exposes its
+public signing key and that close codes 4401, 4403 and 4409 block retries.
+Incoming deliveries require the end-to-end upgrade.
 
-The normal restricted execution sandbox blocks local network and Core Image/macOS
-services required by the pre-existing suite; the full suite was rerun successfully
-outside that restriction. The Xcode macro/asset tools likewise required a normal
-macOS build context. No app launch or real identity authorization was performed.
+Run Swift tests, the Xcode Debug build and swift-format using the commands in
+the [README](../README.md). Swift tests covering the local listener require
+loopback access. Keychain-free unit fixtures use in-memory stores.
 
-Not yet verified: live TLS certificate/redirect/subprotocol behavior through the
-chosen proxy, mini reachability from mobile data, server challenge consumption,
-Go/Kotlin interoperability, durable queues, pairing migration, Android HPKE
-receiving keys, bidirectional endpoint verification or crash-safe persistence.
-The app's relay delivery handler intentionally fails closed until those endpoint
-requirements are implemented. See `MAC_MINI_RELAY_PLAN.md` for acceptance order.
+For the live test, install the Go service behind a trusted TLS 1.3 terminator
+on the tailnet. Enroll the public data from Settings → Diagnostics and from
+the Android debug relay screen. Configure the exact same external URL and
+relay ID on all three. With the phone on mobile data, check both apps report
+authentication. Check revocation and replacement in a controlled enrollment.
+The live test still needs to be run on the deployed service.
+
+Encrypted-envelope processing, relay pairing, Android receiving keys and
+durable queues remain tracked in the [implementation plan](MAC_MINI_RELAY_PLAN.md).

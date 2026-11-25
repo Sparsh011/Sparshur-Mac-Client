@@ -38,18 +38,14 @@ final class URLSessionRelaySocket: NSObject, RelaySocket, @unchecked Sendable {
 
   func send(_ data: Data) async throws {
     guard data.count <= 65536 else { throw RelayError.malformedFrame }
-    try await task.send(.data(data))
+    do { try await task.send(.data(data)) } catch {
+      throw relayCloseError(task.closeCode.rawValue) ?? error
+    }
   }
   func receive() async throws -> Data {
     let message: URLSessionWebSocketTask.Message
     do { message = try await task.receive() } catch {
-      if task.closeCode == .policyViolation { throw RelayError.authentication }
-      if task.closeCode == .protocolError || task.closeCode == .unsupportedData
-        || task.closeCode == .messageTooBig
-      {
-        throw RelayError.malformedFrame
-      }
-      throw error
+      throw relayCloseError(task.closeCode.rawValue) ?? error
     }
     guard case .data(let data) = message, data.count <= 65536 else {
       throw RelayError.malformedFrame
@@ -64,8 +60,18 @@ final class URLSessionRelaySocket: NSObject, RelaySocket, @unchecked Sendable {
     }
   }
   func close() {
-    task.cancel(with: .goingAway, reason: nil)
+    if task.closeCode == .invalid {
+      task.cancel(with: .goingAway, reason: nil)
+    }
     session.invalidateAndCancel()
+  }
+}
+
+func relayCloseError(_ code: Int) -> RelayError? {
+  switch code {
+  case 1008, 4401, 4403, 4409: .authentication
+  case 1002, 1003, 1009: .malformedFrame
+  default: nil
   }
 }
 

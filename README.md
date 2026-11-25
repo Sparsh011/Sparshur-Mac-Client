@@ -1,6 +1,7 @@
 # Sparshur for Mac
 
-Mac mini relay work has started. Read the
+The Mac app connects to the authenticated Go relay using the same transport as
+Android. Read the
 [implementation and security plan](docs/MAC_MINI_RELAY_PLAN.md),
 [draft transport contract](spec/PROTOCOL.md), and
 [transport decision](docs/adr/0002-relay-transport.md).
@@ -8,7 +9,7 @@ The outbound WebSocket/authentication layer is implemented; bidirectional encryp
 messaging still needs relay-compatible pairing, Android receiving keys and durable
 endpoint processing. The local paired-v2 lesson below remains available.
 
-For an operator-enrolled **matching draft relay**, configure these environment
+Configure these environment
 variables in the Xcode Run scheme (or the app's launch environment):
 
 ```text
@@ -19,14 +20,17 @@ SPARSHUR_RELAY_ID=<your-configured-relay-id>
 Both must be present. No relay connection is attempted when both are absent.
 Finder launches do not inherit your terminal's exported environment. No `.env`
 loader is installed. The URL is not a credential and may not contain one.
-Use Settings → Diagnostics for separate relay status. Pause/sleep/quit stops it;
+Settings → Diagnostics shows relay status and provides Copy buttons for the
+device ID and Base64 Ed25519 public key from the loaded identity. Enroll both
+devices with the Go service's offline `relayctl` command. The Go relay and
+both clients use the same exact URL and relay ID. Pause/sleep/quit stops it;
 wake resumes only if receiving was previously active. Client networking is enabled
 in App Sandbox; no TLS verification override or extra package was added.
 
 An authenticated relay status proves connection authentication only. The app
 deliberately rejects encrypted deliveries until the new endpoint protocol is
 implemented and reviewed; local HTTP pairings are not silently relay-compatible.
-No mini service, network exposure or enrollment was deployed by this change.
+Mini deployment and a live phone-to-Mac relay test are pending.
 
 Native macOS 14+ SwiftUI app for the one-way Android → Mac local encryption lesson.
 Charcoal surfaces, **#F72681**, dark appearance and shared **1.2×** typography.

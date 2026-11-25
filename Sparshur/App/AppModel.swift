@@ -93,6 +93,7 @@ final class AppModel {
   private var resumeAfterSleep = false
   var receiverStatus: ReceiverStatus = .stopped
   var relayStatus: RelayStatus = .disabled
+  private(set) var relayEnrollment: (deviceID: String, signingPublicKey: String)?
   var pairingCode: PairingCode?
   var pairingError: String?
   var isCreatingPairing = false
@@ -163,6 +164,8 @@ final class AppModel {
             await receiver.stopAfterFailure()
           }
         case .relayStatus(let status): relayStatus = status
+        case .relayEnrollment(let deviceID, let signingPublicKey):
+          relayEnrollment = (deviceID, signingPublicKey.base64EncodedString())
         }
       }
     }

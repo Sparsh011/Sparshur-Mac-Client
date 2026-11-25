@@ -216,6 +216,8 @@ final class Endpoint {
   // The transport receives a signature, never the existing private seed.
   func relayDeviceID() throws -> String { try text(state, "recipient_id") }
 
+  func relaySigningPublicKey() -> Data { signing.publicKey.rawRepresentation }
+
   func signRelayAuthentication(
     relayURL: String, relayID: String, sessionID: String, clientNonce: Data,
     challenge: Data, expiresAt: UInt64

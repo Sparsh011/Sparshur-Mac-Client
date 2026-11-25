@@ -85,6 +85,7 @@ enum ServiceEvent: Sendable {
   case pairingCleared(UInt64)
   case status(ReceiverStatus)
   case relayStatus(RelayStatus)
+  case relayEnrollment(deviceID: String, signingPublicKey: Data)
   case rejected, networkChanged, storageFailed
 }
 
@@ -130,6 +131,7 @@ actor EndpointService {
     endpoint = restored
     active = true
     try publishIdentity()
+    try publishRelayEnrollment()
   }
   func authorizeIdentity() throws {
     guard let keychain = store as? KeychainStore else {
@@ -144,6 +146,7 @@ actor EndpointService {
     endpoint = restored
     active = true
     try publishIdentity()
+    try publishRelayEnrollment()
   }
   func deactivate() {
     active = false
@@ -152,6 +155,15 @@ actor EndpointService {
   func relayDeviceID() throws -> String {
     guard active, let endpoint else { throw Rejected.state }
     return try endpoint.relayDeviceID()
+  }
+  func relaySigningPublicKey() throws -> Data {
+    guard let endpoint else { throw Rejected.state }
+    return endpoint.relaySigningPublicKey()
+  }
+  private func publishRelayEnrollment() throws {
+    publish(
+      .relayEnrollment(deviceID: try relayDeviceID(), signingPublicKey: try relaySigningPublicKey())
+    )
   }
   func signRelayChallenge(_ challenge: RelayChallenge, configuration: RelayConfiguration) throws
     -> Data
